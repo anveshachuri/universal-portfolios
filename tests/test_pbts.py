@@ -160,3 +160,37 @@ def test_rejects_bad_parameters():
         PBTS(tau=1)
     with pytest.raises(ValueError, match="cov_estimator"):
         PBTS(cov_estimator="factor")
+
+
+def test_min_variance_with_tiny_variances():
+    """cvxopt's tolerances are absolute, so the solve is done at unit scale."""
+    for scale in (1.0, 1e-4, 1e-8, 1e-12):
+        sigma = np.diag([1.0, 4.0]) * scale
+        assert long_only_min_variance(sigma) == pytest.approx([0.8, 0.2], abs=1e-6)
+
+
+def test_asset_without_prices_is_left_out_of_min_variance():
+    """Filled 'no change' returns would look riskless and MV would pile into the asset."""
+    S = tools.random_portfolio(n=100, k=3, mu=0.0, sd=0.01)
+    S.iloc[:40, 2] = np.nan
+    tau = 30
+    B = PBTS(tau=tau).run(S).B.to_numpy()
+    # weights for periods tau to 40 come from windows that include the missing prices:
+    # the asset only gets its EW share, (1 - delta) / 3, never any of MV
+    assert B[tau:41, 2].max() < 1 / 3
+    # once the window has only real prices, MV may hold it again
+    assert np.all(np.isfinite(B)) and B.sum(axis=1) == pytest.approx(1)
+    algo = PBTS(tau=tau)
+    algo.init_step(pd.DataFrame(S))
+    X = (S / S.shift(1)).to_numpy()
+    for x in X[:41]:
+        algo.step(x, None)
+    assert np.array(algo.missing).any(axis=0)[2]
+
+
+def test_frequency_is_passed_to_algo():
+    S = tools.random_portfolio(n=120, k=3, mu=0.0, sd=0.01)
+    result = PBTS(tau=10, frequency=5).run(S)
+    B = result.B.to_numpy()
+    changes = [t for t in range(1, len(B)) if not np.allclose(B[t], B[t - 1])]
+    assert changes and all(t % 5 == 1 for t in changes)

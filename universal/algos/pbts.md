@@ -19,11 +19,11 @@ On the bundled daily datasets with the default $`\tau = 120`$ days, the results 
 | Dataset | Strategy | Wealth | Sharpe | Volatility | Max drawdown | Mean $`\delta^*`$ |
 |---|---|---:|---:|---:|---:|---:|
 | NYSE(O) | CRP | 26.68 | 1.16 | 13.4% | 36.6% | |
-| | MV | 14.37 | 1.11 | 11.3% | 46.3% | |
-| | PBTS EW | 19.50 | 1.18 | 11.9% | 41.5% | 0.49 |
-| | PBTS VW | 14.63 | 1.03 | 12.4% | 44.1% | 0.49 |
+| | MV | 14.32 | 1.10 | 11.3% | 46.3% | |
+| | PBTS EW | 19.42 | 1.17 | 11.9% | 41.5% | 0.49 |
+| | PBTS VW | 14.61 | 1.02 | 12.4% | 44.2% | 0.49 |
 | DJIA | CRP | 0.81 | -0.28 | 25.5% | 37.8% | |
-| | MV | 0.71 | -0.77 | 19.7% | 35.2% | |
+| | MV | 0.71 | -0.77 | 19.7% | 35.3% | |
 | | PBTS EW | 0.75 | -0.58 | 21.2% | 35.9% | 0.55 |
 | | PBTS VW | 0.72 | -0.68 | 20.8% | 36.4% | 0.54 |
 | TSE | CRP | 1.57 | 0.76 | 13.0% | 33.7% | |
@@ -31,14 +31,14 @@ On the bundled daily datasets with the default $`\tau = 120`$ days, the results 
 | | PBTS EW | 1.64 | 0.98 | 10.6% | 27.6% | 0.49 |
 | | PBTS VW | 1.65 | 0.98 | 10.8% | 26.9% | 0.46 |
 | SP500 | CRP | 1.64 | 0.55 | 22.0% | 31.1% | |
-| | MV | 1.16 | 0.26 | 18.0% | 32.1% | |
+| | MV | 1.16 | 0.25 | 18.0% | 32.3% | |
 | | PBTS EW | 1.38 | 0.43 | 19.1% | 29.9% | 0.50 |
-| | PBTS VW | 1.26 | 0.33 | 19.9% | 37.1% | 0.50 |
+| | PBTS VW | 1.25 | 0.32 | 19.9% | 37.1% | 0.50 |
 
 Three things stand out:
 - **It is close to a fixed half-and-half blend.** On daily data MV beats the benchmark on about half the days, so $`\delta^*`$ averages about 0.5 on every dataset. PBTS then sits between MV and its benchmark in volatility and Sharpe ratio, but rarely beats both.
 - **It lowers volatility.** Volatility is below CRP's on all four datasets. The Sharpe ratio is above CRP's only on NYSE(O), slightly, and on TSE.
-- **It trades a lot.** Turnover is about three times CRP's. At a fee of 0.2% per unit traded, PBTS EW's wealth on NYSE(O) falls from 19.50 to 11.55, while CRP's falls from 26.68 to 23.41.
+- **It trades a lot.** Turnover is about three times CRP's. At a fee of 0.2% per unit traded, PBTS EW's wealth on NYSE(O) falls from 19.42 to 11.40, while CRP's falls from 26.68 to 23.41.
 
 The paper's monthly and weekly results may not carry over to daily rebalancing.
 
@@ -65,7 +65,7 @@ For each period $`k`$:
    - Sample $`\tilde\delta_j \sim \text{Beta}(a, b)`$ and build the test blend $`\tilde\omega_j`$ the same way (eq. 8).
    - Decide the test with eq. (9). It is a success if $`R^\top\tilde\omega > R^\top\bar\omega`$ and $`\tilde\delta > \bar\delta`$, or if $`R^\top\tilde\omega < R^\top\bar\omega`$ and $`\tilde\delta < \bar\delta`$. Otherwise it is a failure.
    - On a success $`a \gets a+1`$, and on a failure $`b \gets b+1`$. Equal returns update nothing, and a sample equal to the mean is redrawn (footnote 1).
-4. Set $`\delta^*_k = (1+a_\tau)/(1+a_\tau+1+b_\tau)`$, the posterior mean (eq. 10). Hold $`\delta^*_k \omega^{MV}_k + (1-\delta^*_k)\omega^{EW(VW)}_k`$ (eq. 11).
+4. Set $`\delta^*_k = (1+a_\tau)/(1+a_\tau+1+b_\tau)`$, the posterior mean (eq. 10). Here $`a_\tau`$ and $`b_\tau`$ are the numbers of successes and failures in the window, not the running $`a`$ and $`b`$ above, which started at 1, so this equals the final $`a/(a+b)`$. Hold $`\delta^*_k \omega^{MV}_k + (1-\delta^*_k)\omega^{EW(VW)}_k`$ (eq. 11).
 
 The paper uses $`\tau = 120`$ months or $`\tau = 200`$ weeks.
 
@@ -102,9 +102,10 @@ The algorithm is therefore deterministic given the data, and the exploration tha
 
 ## Departures from the paper
 
-- **Long-only MV.** Eq. (4) is the unconstrained minimum-variance portfolio, which can go short. Following the library maintainer's preference, `pbts.py` adds $`\omega \ge 0`$ and solves the quadratic program with cvxopt, as `MPT(method="variance")` does. With this constraint the blend is long-only too.
+- **Long-only MV.** Eq. (4) is the unconstrained minimum-variance portfolio, which can go short. Following the library maintainer's preference, `pbts.py` adds $`\omega \ge 0`$ and solves the quadratic program with cvxopt, as `MPT(method="variance")` does. With this constraint the blend is long-only too. cvxopt's tolerances are absolute, and daily variances are tiny, so the covariance is divided by its mean variance before the solve, which doesn't change the minimiser.
 - **Covariance.** The paper estimates $`\Sigma_k`$ with a factor model (Fan et al., 2008). The default here is the empirical covariance of the window. `"ledoit-wolf"`, `"oas"` or any scikit-learn covariance estimator can be passed instead.
 - **VW without market capitalisations.** Eq. (3) lets the previous value-weighted portfolio drift with prices. The bundled datasets have no market capitalisations, so VW starts from uniform weights and is buy and hold from then on.
+- **Missing prices.** An asset with a missing price anywhere in the window, for example before it is listed, is left out of $`\omega^{MV}_k`$ until the window holds only real prices. Filling its missing returns with "no change" would make it look riskless, and MV would put a large weight on it, as if it were cash. It still gets its share of EW, and of VW from when its price appears, which matches what uniform CRP does in this package.
 - **Warm-up.** The paper starts with $`\tau`$ periods of training data. Here, until $`\tau`$ periods have been seen, PBTS holds the benchmark: EW, or VW, which is buy and hold.
 - **Ties within rounding.** Footnote 1 skips the update when the two blends earn exactly the same. Weights that sum to one only up to floating-point rounding would otherwise decide a test by rounding error, for example on the first period's "no change" returns. So the code treats return differences within $`10^{-12}`$ as ties.
 

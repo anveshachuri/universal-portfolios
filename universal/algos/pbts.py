@@ -44,6 +44,8 @@ class PBTS(Algo):
     - Without market capitalisations, VW is buy and hold from uniform weights.
     - Until tau periods have been seen, it holds the benchmark portfolio. The paper
       assumes tau periods of training data before the first decision.
+    - Assets with missing prices anywhere in the window are left out of MV. Treating
+      them as "no change" would make them look riskless, and MV would pile into them.
 
     What it is good for: a cautious blend of a low-risk portfolio and a naive one, aimed
     at risk-adjusted returns rather than wealth. It doesn't try to follow winners or
@@ -59,9 +61,12 @@ class PBTS(Algo):
     """
 
     PRICE_TYPE = "ratio"
-    REPLACE_MISSING = True
+    # missing prices reach `step` as NaN, so that MV can leave those assets out
+    REPLACE_MISSING = False
 
-    def __init__(self, benchmark="EW", tau=120, cov_estimator="empirical", seed=0):
+    def __init__(
+        self, benchmark="EW", tau=120, cov_estimator="empirical", seed=0, **kwargs
+    ):
         """
         :param benchmark: "EW" for the equally weighted portfolio (TS-EM) or "VW" for the
             value-weighted one (TS-VM), which without market capitalisations is buy and
@@ -71,8 +76,10 @@ class PBTS(Algo):
         :param cov_estimator: "empirical", "ledoit-wolf", "oas", or any scikit-learn
             covariance estimator. It is fitted on the net returns of the last tau periods.
         :param seed: Seed for the Beta samples. It only affects how exact ties are broken.
+        :param kwargs: Passed to `Algo`, for example `frequency` to rebalance every
+            `frequency` periods. tau then counts rebalancing periods, as in the paper.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         if benchmark not in BENCHMARKS:
             raise ValueError(
                 f"benchmark must be one of {BENCHMARKS}, got {benchmark!r}"
@@ -101,6 +108,8 @@ class PBTS(Algo):
         n_assets = X.shape[1]
         # gross returns R_k of the periods seen so far, oldest first, at most tau of them
         self.returns = []
+        # which assets had a missing price in each of those periods
+        self.missing = []
         # value-weighted portfolio, eq. (3); starts from uniform weights
         self.vw = np.ones(n_assets) / n_assets
         self.rng = np.random.default_rng(self.seed)
@@ -108,13 +117,18 @@ class PBTS(Algo):
     def step(self, x, last_b, history=None):
         x = np.asarray(x, dtype=float)
         n_assets = len(x)
+        # an asset without a price yet (or anymore) neither gains nor loses
+        missing = np.isnan(x)
+        x = np.where(missing, 1.0, x)
 
         # eq. (3): the value-weighted portfolio drifts with prices
         self.vw = self.vw * x / (self.vw @ x)
 
         self.returns.append(x)
+        self.missing.append(missing)
         if len(self.returns) > self.tau:
             self.returns.pop(0)
+            self.missing.pop(0)
 
         # eq. (2) or (3)
         benchmark = (
@@ -124,7 +138,12 @@ class PBTS(Algo):
             return benchmark
 
         R = np.array(self.returns)
-        mv = self.min_variance(R)
+        # only assets with a price in every period of the window go into MV
+        priced = ~np.array(self.missing).any(axis=0)
+        if not priced.any():
+            return benchmark
+        mv = np.zeros(n_assets)
+        mv[priced] = self.min_variance(R[:, priced])
         delta = self.blending_coefficient(R, mv, benchmark)
         # eq. (11)
         return delta * mv + (1 - delta) * benchmark
@@ -165,7 +184,13 @@ class PBTS(Algo):
 def long_only_min_variance(sigma):
     """Minimize b' sigma b subject to b >= 0 and sum(b) = 1."""
     n = sigma.shape[0]
-    P = matrix(2 * np.asarray(sigma, dtype=float))
+    sigma = np.asarray(sigma, dtype=float)
+    # cvxopt's tolerances are absolute, and daily variances are tiny, so it would stop
+    # early. The minimiser doesn't depend on the scale, so solve with unit mean variance.
+    scale = np.trace(sigma) / n
+    if scale > 0:
+        sigma = sigma / scale
+    P = matrix(2 * sigma)
     q = matrix(np.zeros(n))
     G = matrix(-np.eye(n))
     h = matrix(np.zeros(n))
